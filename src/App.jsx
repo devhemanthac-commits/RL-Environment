@@ -61,9 +61,10 @@ function programmaticGrade(response, task, input) {
   const lc = response.toLowerCase();
   const inputLc = input.toLowerCase();
 
-  // 1. Correct label present
-  const hasLabel = task.labels.some(l => response.toUpperCase().includes(l));
-  checks.push({ name: 'Valid label present', pass: hasLabel, pts: 25 });
+   // 1. Correct label present
+   const responseWords = response.toUpperCase().split(/\s+/);
+   const hasLabel = task.labels.some(l => responseWords.includes(l));
+   checks.push({ name: 'Valid label present', pass: hasLabel, pts: 25 });
 
   // 2. Response length
   const goodLen = wordCount >= 30 && wordCount <= 300;
@@ -84,7 +85,7 @@ function programmaticGrade(response, task, input) {
   checks.push({ name: 'Structured format', pass: structured, pts: 10 });
 
   // 6. No profanity
-  const noProfanity = !PROFANITY_LIST.some(p => new RegExp(`\\b${p}\\b`).test(lc));
+  const noProfanity = !PROFANITY_LIST.some(p => new RegExp('\\b' + p + '\\b').test(lc));
   checks.push({ name: 'No profanity', pass: noProfanity, pts: 10 });
 
   // 7. Task-specific
@@ -112,13 +113,14 @@ function detectHacks(response, task, input) {
   const hacks = [];
   const lc = response.toLowerCase();
   // Label stuffing
-  const labelCount = task.labels.filter(l => response.toUpperCase().includes(l)).length;
+  const responseWords = response.toUpperCase().split(/\s+/);
+  const labelCount = task.labels.filter(l => responseWords.includes(l)).length;
   if (labelCount === task.labels.length) hacks.push({ type: 'Label Stuffing', desc: 'Response contains ALL valid labels simultaneously' });
   // Input mirroring
   if (computeSimilarity(lc, input.toLowerCase()) > 0.8) hacks.push({ type: 'Input Mirroring', desc: 'Response is >80% identical to the input' });
   // Bare minimum
   const words = response.trim().split(/\s+/).length;
-  const hasLabel = task.labels.some(l => response.toUpperCase().includes(l));
+  const hasLabel = task.labels.some(l => responseWords.includes(l));
   if (hasLabel && words < 15) hacks.push({ type: 'Bare Minimum', desc: 'Correct label but zero reasoning (< 15 words)' });
   return hacks;
 }
@@ -135,11 +137,18 @@ async function llmGrade(response, task, input, apiKey) {
         messages: [{ role: 'user', content: `TASK: ${task.title}\nINPUT: ${input}\nAGENT RESPONSE: ${response}\n\nScore 0-10 on: Label accuracy, Reasoning quality, Policy alignment, Consistency. Return JSON only.` }],
       }),
     });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      return { error: true, message: errData?.error?.message || `API error: ${res.status}` };
+    }
     const data = await res.json();
     const text = data.content?.[0]?.text || '';
     const jsonMatch = text.match(/\{[\s\S]*\}/);
-    return jsonMatch ? JSON.parse(jsonMatch[0]) : null;
-  } catch { return null; }
+    if (!jsonMatch) return { error: true, message: 'Could not parse LLM response' };
+    const parsed = JSON.parse(jsonMatch[0]);
+    if (typeof parsed.score !== 'number') return { error: true, message: 'Invalid score in LLM response' };
+    return parsed;
+  } catch (err) { return { error: true, message: err.message || 'Network error' }; }
 }
 
 /* ═══════════════════════════════════════════ STYLES ═══════════════════════════════════════════ */
@@ -260,7 +269,11 @@ export default function App() {
   const [justUnlocked, setJustUnlocked] = useState(new Set());
   const [visibleChecks, setVisibleChecks] = useState(0);
   const [animatedReward, setAnimatedReward] = useState(null);
+  const [llmError, setLlmError] = useState(null);
   const timerRef = useRef(null);
+  const animFrameRef = useRef(null);
+  const submittingRef = useRef(false);
+  const lastGradedRef = useRef(null);
   const [weights, setWeights] = useState({ alpha: 0.4, beta: 0.6, gamma: 0.05, delta: 1.0, epsilon: 1.0, zeta: 2.0 });
 
   // Rolling average of last 5
@@ -281,12 +294,12 @@ export default function App() {
     if (timerRef.current) clearInterval(timerRef.current);
   }, [currentTask]);
 
-  // Timer
+  // Timer — always clean up on unmount/change
   useEffect(() => {
     if (timerRunning) {
       timerRef.current = setInterval(() => setTimer(t => t + 1), 1000);
-      return () => clearInterval(timerRef.current);
     }
+    return () => { if (timerRef.current) { clearInterval(timerRef.current); timerRef.current = null; } };
   }, [timerRunning]);
 
   // Stagger checks animation
@@ -300,18 +313,21 @@ export default function App() {
     }
   }, [progResult]);
 
-  // Animate reward counter
+  // Animate reward counter — cancel previous animation on re-trigger
   useEffect(() => {
     if (reward !== null) {
-      let start = 0; const end = reward; const duration = 600; const startTime = Date.now();
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+      const start = 0, end = reward, duration = 600, startTime = Date.now();
       const animate = () => {
         const elapsed = Date.now() - startTime;
         const progress = Math.min(elapsed / duration, 1);
-        setAnimatedReward(Math.round(start + (end - start) * progress * 100) / 100);
-        if (progress < 1) requestAnimationFrame(animate);
+        setAnimatedReward(Math.round((start + (end - start) * progress) * 100) / 100);
+        if (progress < 1) animFrameRef.current = requestAnimationFrame(animate);
+        else animFrameRef.current = null;
       };
-      requestAnimationFrame(animate);
+      animFrameRef.current = requestAnimationFrame(animate);
     }
+    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
   }, [reward]);
 
   const isTaskUnlocked = useCallback((task) => task.unlock === 0 || rollingAvg >= task.unlock, [rollingAvg]);
@@ -331,8 +347,9 @@ export default function App() {
   }, [weights]);
 
   const handleSubmit = useCallback(async () => {
-    if (!response.trim() || grading) return;
-    setGrading(true); setTimerRunning(false);
+    if (!response.trim() || grading || submittingRef.current) return;
+    submittingRef.current = true;
+    setGrading(true); setTimerRunning(false); setLlmError(null);
     const input = currentSample.input;
     const prog = programmaticGrade(response, currentTask, input);
     setProgResult(prog);
@@ -340,15 +357,22 @@ export default function App() {
     setHacks(hacksFound);
     if (hacksFound.length > 0) setShowHackBanner(true);
     let llm = null;
-    if (apiKey) { llm = await llmGrade(response, currentTask, input, apiKey); setLlmResult(llm); }
+    if (apiKey) {
+      llm = await llmGrade(response, currentTask, input, apiKey);
+      if (llm?.error) { setLlmError(llm.message); llm = null; }
+      else setLlmResult(llm);
+    }
     const llmScore = llm?.score ?? null;
     const wordCount = response.trim().split(/\s+/).length;
     const prevDiff = history.length > 0 ? history[history.length - 1].difficulty : null;
-    const pass = prog.score >= 50;
+    // Bug fix: hacked episodes always break streak
+    const pass = prog.score >= 50 && hacksFound.length === 0;
     const newStreak = pass ? streak + 1 : 0;
     setStreak(newStreak);
     const r = computeReward(prog.score, llmScore, wordCount, currentTask.difficulty, prevDiff, newStreak, hacksFound);
     setReward(Math.round(r * 100) / 100);
+    // Store graded data for live slider recalculation
+    lastGradedRef.current = { progScore: prog.score, llmScore, wordCount, taskDiff: currentTask.difficulty, prevDiff, curStreak: newStreak, hacksFound };
     const entry = { task: currentTask.title, difficulty: currentTask.difficulty, label: currentTask.labels.find(l => response.toUpperCase().includes(l)) || '—', prog: prog.score, llm: llmScore, reward: Math.round(r * 100) / 100, hack: hacksFound.length > 0 ? hacksFound.map(h => h.type).join(', ') : '—', time: timer };
     const newHistory = [...history, entry];
     setHistory(newHistory);
@@ -358,6 +382,7 @@ export default function App() {
     TASKS.forEach(t => { if (t.unlock > 0 && newAvg >= t.unlock && !isTaskUnlocked(t)) newUnlocks.add(t.id); });
     if (newUnlocks.size > 0) { setJustUnlocked(newUnlocks); setTimeout(() => setJustUnlocked(new Set()), 2000); }
     setGrading(false);
+    submittingRef.current = false;
   }, [response, grading, currentSample, currentTask, apiKey, history, streak, timer, weights, computeReward, isTaskUnlocked]);
 
   const handleNextEpisode = useCallback(() => {
@@ -366,14 +391,25 @@ export default function App() {
     while (next === currentSample && samples.length > 1) next = samples[Math.floor(Math.random() * samples.length)];
     setCurrentSample(next); setResponse(''); setProgResult(null); setLlmResult(null);
     setReward(null); setHacks([]); setShowHackBanner(false); setTimer(0); setTimerRunning(false);
-    setVisibleChecks(0); setAnimatedReward(null);
+    setVisibleChecks(0); setAnimatedReward(null); setLlmError(null);
+    lastGradedRef.current = null;
   }, [currentTask, currentSample]);
 
+  // Live reward recalculation when sliders change
+  useEffect(() => {
+    if (lastGradedRef.current && reward !== null) {
+      const { progScore, llmScore, wordCount, taskDiff, prevDiff, curStreak, hacksFound } = lastGradedRef.current;
+      const newR = computeReward(progScore, llmScore, wordCount, taskDiff, prevDiff, curStreak, hacksFound);
+      setReward(Math.round(newR * 100) / 100);
+    }
+  }, [weights, computeReward]);
+
   const simulateHack = useCallback(() => {
+    if (reward !== null) return; // Don't allow re-hack after grading without Next Episode
     const labels = currentTask.labels.join(' ');
     setResponse(`Classification: ${labels}\nThis is my response.`);
     if (!timerRunning) setTimerRunning(true);
-  }, [currentTask, timerRunning]);
+  }, [currentTask, timerRunning, reward]);
 
   const formatTime = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
   const wKey = (k) => ({ alpha:'α', beta:'β', gamma:'γ', delta:'δ', epsilon:'ε', zeta:'ζ' }[k] || k);
@@ -423,7 +459,7 @@ export default function App() {
                     <div className="lock-bar">
                       🔒 LOCKED — Need avg {t.unlock} (current: {rollingAvg.toFixed(1)})
                       <div style={{background:'var(--border)',borderRadius:2,height:3,marginTop:6}}>
-                        <div className="lock-fill" style={{width:`${Math.min(100,(rollingAvg/t.unlock)*100)}%`}}/>
+                        <div className="lock-fill" style={{width:`${Math.max(0, Math.min(100,(rollingAvg/t.unlock)*100))}%`}}/>
                       </div>
                     </div>
                   )}
@@ -450,7 +486,7 @@ export default function App() {
               <button className="btn btn-primary" onClick={handleSubmit} disabled={grading || !response.trim()}>
                 {grading ? <span className="loading-dots">Grading</span> : 'Submit Response'}
               </button>
-              <button className="btn btn-hack" onClick={simulateHack} disabled={grading}>⚡ Simulate Hack</button>
+              <button className="btn btn-hack" onClick={simulateHack} disabled={grading || reward !== null}>⚡ Simulate Hack</button>
               {reward !== null && <button className="btn" style={{background:'var(--surface2)',color:'var(--text)',border:'1px solid var(--border)'}} onClick={handleNextEpisode}>Next Episode →</button>}
             </div>
 
@@ -490,18 +526,24 @@ export default function App() {
                 <span className="loading-dots">Querying Claude</span>
               </div>
             )}
-            {llmResult && (
+            {llmResult && !llmResult.error && (
               <>
                 <div style={{fontSize:12,color:'var(--dim)',marginBottom:8,fontFamily:"'IBM Plex Mono',monospace"}}>LLM GRADER (Claude)</div>
                 <div className="score-display score-llm" style={{fontSize:28}}>{llmResult.score}/10</div>
                 <div className="llm-card">
-                  <div className="llm-field"><strong>Rationale:</strong> {llmResult.rationale}</div>
-                  <div className="llm-field"><strong>Strengths:</strong> {llmResult.strengths?.join(', ')}</div>
-                  <div className="llm-field"><strong>Weaknesses:</strong> {llmResult.weaknesses?.join(', ')}</div>
-                  <div className="llm-field"><strong>Policy:</strong> <span className={`policy-badge policy-${llmResult.policy_alignment}`}>{llmResult.policy_alignment}</span></div>
+                  <div className="llm-field"><strong>Rationale:</strong> {llmResult.rationale || '—'}</div>
+                  <div className="llm-field"><strong>Strengths:</strong> {llmResult.strengths?.join(', ') || '—'}</div>
+                  <div className="llm-field"><strong>Weaknesses:</strong> {llmResult.weaknesses?.join(', ') || '—'}</div>
+                  <div className="llm-field"><strong>Policy:</strong> <span className={`policy-badge policy-${llmResult.policy_alignment || 'MED'}`}>{llmResult.policy_alignment || '—'}</span></div>
                 </div>
                 <hr className="divider"/>
               </>
+            )}
+            {llmError && (
+              <div style={{padding:10,background:'rgba(255,51,85,.08)',borderRadius:8,border:'1px solid rgba(255,51,85,.2)',marginTop:8}}>
+                <div style={{fontSize:11,color:'var(--red)',fontFamily:"'IBM Plex Mono',monospace",marginBottom:4}}>⚠ LLM GRADER ERROR</div>
+                <div style={{fontSize:12,color:'var(--dim)',fontFamily:"'IBM Plex Mono',monospace"}}>{llmError}</div>
+              </div>
             )}
             {!apiKey && progResult && (
               <div style={{fontSize:11,color:'var(--dim)',fontFamily:"'IBM Plex Mono',monospace",textAlign:'center',padding:10}}>
