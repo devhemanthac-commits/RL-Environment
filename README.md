@@ -11,7 +11,7 @@
 
 *Built for the Scalar School of Technology × Meta Hackathon*
 
-[Live Demo](#quick-start) · [Features](#features) · [Architecture](#architecture)
+[Features](#features) · [Architecture](#architecture)
 
 </div>
 
@@ -65,8 +65,8 @@ Detects and penalizes three types of reward hacking:
 
 ```bash
 # Clone the repo
-git clone https://github.com/devhemanthac/moderation-rl-gym.git
-cd moderation-rl-gym
+git clone https://github.com/devhemanthac-commits/RL-Environment.git
+cd RL-Environment
 
 # Install dependencies
 npm install
@@ -77,7 +77,16 @@ npm run dev
 
 Open **http://localhost:5173** and start training!
 
-> **Optional:** Add your Anthropic API key in the top-right input for LLM grading via Claude.
+> **API Key Setup:** You can optionally provide an Anthropic API Key directly in the top-right corner of the UI to enable the LLM Grader. The key is never explicitly stored to `localStorage` or transmitted anywhere except directly to Anthropic.
+> 
+> *Note on Vite Proxying:* For a hackathon quick-start, the Anthropic API is called directly from the browser relying on `anthropic-dangerous-direct-browser-access: true`. For a production deployment, you'd want to configure a proxy path in `vite.config.js` to route calls through a secure backend.
+
+---
+
+## 🏷️ GitHub Topics
+
+Improve the discoverability of this project by adding the following topics in your GitHub repository settings:
+`reinforcement-learning`, `content-moderation`, `react`, `llm`, `hackathon`
 
 ---
 
