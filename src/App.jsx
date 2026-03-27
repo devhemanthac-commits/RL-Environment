@@ -13,6 +13,10 @@ const TASKS = [
       { input: 'This community has contributed so much to our culture and economy.' },
       { input: 'These people are subhuman and deserve what they get.' },
       { input: 'I think we should have a respectful debate about immigration reform.' },
+      { input: 'Using slurs against [group] is absolutely unacceptable on this platform.' },
+      { input: 'These [group] animals are spreading diseases in our neighborhoods.' },
+      { input: 'I don\'t understand why [policy] is getting so much support honestly.' },
+      { input: 'We must secure our borders against these invaders immediately.' },
     ],
   },
   {
@@ -25,6 +29,9 @@ const TASKS = [
       { input: 'Headline: "5G Towers Cause COVID"\nClaim: 5G cellular towers emit radiation that directly causes COVID-19 symptoms in nearby populations.' },
       { input: 'Headline: "Water on Mars Confirmed"\nClaim: NASA confirmed traces of liquid water on Mars surface through spectroscopic analysis in recent missions.' },
       { input: 'Headline: "AI Replaces All Jobs by 2025"\nClaim: Leading economists confirm that artificial intelligence will replace 95% of all human jobs by end of 2025.' },
+      { input: 'Headline: "Elections Rigged Globally"\nClaim: A whistleblower from the UN has proven that all major global elections since 2010 were pre-determined by an elite cabal.' },
+      { input: 'Headline: "Eating Garlic Cures Flu"\nClaim: Doctors are hiding the fact that eating a clove of raw garlic every morning completely eradicates the influenza virus within 24 hours.' },
+      { input: 'Headline: "Shark Swims in Flooded Highway"\nClaim: A great white shark was spotted swimming down Interstate 10 in Houston during the recent hurricane flooding.' },
     ],
   },
   {
@@ -37,6 +44,9 @@ const TASKS = [
       { input: '"LOL these [group] people are so funny when they try to act normal 😂😂 no offense tho"' },
       { input: '"I\'m [group member] and honestly we ARE terrible at driving, fight me 😤 #selfDeprecating"' },
       { input: '"What a time to be alive — apparently saying \'hello\' is now a microaggression. Peak 2024 moment."' },
+      { input: '"Yes, let\'s just blindly trust the government. They\'ve NEVER lied to us before. Wake up sheeple."\n[Image: Text over a generic stock photo of a flock of sheep]' },
+      { input: '"If this [new movie] replaces the original [beloved character] with a [group member], we riot."\n(Posted in a movie review forum)' },
+      { input: '"You people wouldn\'t last five minutes in my neighborhood. Soft generation."\n(Comment on a video of teenagers complaining about a minor inconvenience)' },
     ],
   },
   {
@@ -47,6 +57,8 @@ const TASKS = [
       { input: 'ORIGINAL POST: "If you support [policy], you are literally the enemy of the people and deserve consequences."\n\nAPPEAL: "My post was political speech protected under free expression. I was criticizing a policy, not threatening individuals. The word \'consequences\' referred to electoral consequences, not violence."' },
       { input: 'ORIGINAL POST: "New study from [university] proves [group] has lower IQ — just sharing science, don\'t shoot the messenger 🤷"\n\nAPPEAL: "I was sharing a published study for academic discussion. Censoring scientific discourse sets a dangerous precedent. The study exists and I merely referenced it."' },
       { input: 'ORIGINAL POST: "[Public figure] should be unalived for what they did to this country. Who\'s with me?"\n\nAPPEAL: "This was obviously hyperbolic. Everyone uses \'unalived\' as a joke. I\'m a 16-year-old who was expressing frustration, not making a real threat."' },
+      { input: 'ORIGINAL POST: "Here\'s the actual home address of the CEO who just fired 5,000 workers: [Address]. Do with this what you will."\n\nAPPEAL: "This address is public record. I found it on Google within 5 minutes. You cannot ban me for sharing public information."' },
+      { input: 'ORIGINAL POST: "The side effects of [new medication] are worse than the disease itself. Several people I know have been hospitalized after taking it."\n\nAPPEAL: "I am sharing personal anecdotes. I am not a doctor, nor did I claim to be. Deleting my post suppresses anecdotal evidence and patient discussion."'}
     ],
   },
 ];
@@ -170,7 +182,16 @@ body::after{content:'';position:fixed;inset:0;background:radial-gradient(ellipse
 .api-input:focus{outline:none;border-color:var(--blue);}
 /* MAIN GRID */
 .main{display:grid;grid-template-columns:35% 40% 25%;flex:1;overflow:hidden;}
-@media(max-width:1024px){.main{grid-template-columns:1fr;}}
+@media(max-width:1024px){
+  .main{grid-template-columns:1fr;overflow-y:auto;}
+  .panel{max-height:none;border-right:none;border-bottom:1px solid var(--border);}
+  .panel:last-child{border-bottom:none;}
+}
+@media(max-width:768px){
+  .header{flex-direction:column;align-items:flex-start;gap:12px;}
+  .stats{flex-wrap:wrap;gap:16px;}
+  .api-input{width:100%;}
+}
 .panel{padding:20px;border-right:1px solid var(--border);overflow-y:auto;max-height:calc(100vh - 52px - 240px);}
 .panel:last-child{border-right:none;}
 .panel-title{font-family:'IBM Plex Mono',monospace;font-size:13px;text-transform:uppercase;letter-spacing:2px;color:var(--dim);margin-bottom:16px;}
@@ -281,6 +302,8 @@ export default function App() {
     const last5 = history.slice(-5).map(h => h.reward);
     return last5.length ? last5.reduce((a, b) => a + b, 0) / last5.length : 0;
   }, [history]);
+
+  const reversedHistory = useMemo(() => [...history].reverse(), [history]);
 
   const totalXP = useMemo(() => history.reduce((s, h) => s + Math.max(0, h.reward), 0), [history]);
 
@@ -411,6 +434,22 @@ export default function App() {
     if (!timerRunning) setTimerRunning(true);
   }, [currentTask, timerRunning, reward]);
 
+  const exportJSON = useCallback(() => {
+    const data = JSON.stringify(history, null, 2);
+    const blob = new Blob([data], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'moderation-rl-gym-session.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [history]);
+
+  const resetSession = useCallback(() => {
+    if(confirm("Are you sure you want to clear all history and start fresh?")) {
+      setHistory([]); setStreak(0); setCurrentTask(TASKS[0]); setReward(null); setProgResult(null); setLlmResult(null); setHacks([]); setShowHackBanner(false); setTimer(0); setTimerRunning(false); setVisibleChecks(0); setAnimatedReward(null); setLlmError(null); lastGradedRef.current = null;
+    }
+  }, []);
+
   const formatTime = (s) => `${Math.floor(s/60).toString().padStart(2,'0')}:${(s%60).toString().padStart(2,'0')}`;
   const wKey = (k) => ({ alpha:'α', beta:'β', gamma:'γ', delta:'δ', epsilon:'ε', zeta:'ζ' }[k] || k);
 
@@ -479,8 +518,10 @@ export default function App() {
           {/* CENTER — RESPONSE */}
           <div className="panel">
             <div className="panel-title">🤖 Agent Response</div>
-            <textarea className="response-area" placeholder={`Write your ${currentTask.labels.join(' / ')} classification with reasoning...`}
-              value={response} onChange={e=>{setResponse(e.target.value);handleFirstKeystroke();}} disabled={grading}/>
+            <textarea className="response-area" placeholder={`Write your ${currentTask.labels.join(' / ')} classification with reasoning...\n(Press Ctrl+Enter to Submit)`}
+              value={response} onChange={e=>{setResponse(e.target.value);handleFirstKeystroke();}} 
+              onKeyDown={(e) => { if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') handleSubmit(); }}
+              disabled={grading}/>
             <div className="word-count">{response.trim().split(/\s+/).filter(Boolean).length} words</div>
             <div className="btn-row">
               <button className="btn btn-primary" onClick={handleSubmit} disabled={grading || !response.trim()}>
@@ -575,6 +616,32 @@ export default function App() {
 
         {/* HISTORY */}
         <div className="history">
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'8px 12px',background:'var(--surface2)',borderBottom:'1px solid var(--border)'}}>
+            <div style={{fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:'var(--dim)',fontWeight:600}}>EPISODE HISTORY</div>
+            <div style={{display:'flex',gap:8}}>
+              {history.length > 0 && <button onClick={exportJSON} className="btn" style={{padding:'4px 8px',fontSize:11,background:'rgba(0,130,251,0.1)',color:'var(--blue)',border:'1px solid var(--blue)'}}>⬇ Export JSON</button>}
+              {history.length > 0 && <button onClick={resetSession} className="btn" style={{padding:'4px 8px',fontSize:11,background:'rgba(255,51,85,0.1)',color:'var(--red)',border:'1px solid var(--red)'}}>↻ Reset</button>}
+            </div>
+          </div>
+          {history.length > 1 && (
+            <div style={{height:60,width:'100%',background:'var(--surface)',borderBottom:'1px solid var(--border)',position:'relative'}}>
+              <svg width="100%" height="100%" preserveAspectRatio="none">
+                {(() => {
+                  const maxR = Math.max(...history.map(h => h.reward), 1);
+                  const minR = Math.min(...history.map(h => h.reward), -1);
+                  const range = maxR - minR || 1;
+                  const pts = history.map((h, i) => `${(i / (history.length - 1)) * 100},${100 - ((h.reward - minR) / range) * 100}`).join(' ');
+                  return (
+                    <>
+                      <polygon points={`0,100 ${pts} 100,100`} fill="rgba(0,130,251,0.1)" />
+                      <polyline points={pts} fill="none" stroke="var(--blue)" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+                    </>
+                  );
+                })()}
+              </svg>
+              <div style={{position:'absolute',top:4,left:8,fontSize:10,color:'var(--dim)',fontFamily:"'IBM Plex Mono',monospace"}}>Reward Curve</div>
+            </div>
+          )}
           <table>
             <thead>
               <tr><th>Task</th><th>Label</th><th>Prog</th><th>LLM</th><th>Reward</th><th>Hack?</th><th>Time</th></tr>
@@ -582,7 +649,7 @@ export default function App() {
             <tbody>
               {history.length === 0 ? (
                 <tr><td colSpan={7} style={{textAlign:'center',padding:20,color:'var(--dim)'}}>No episodes yet — submit your first response above</td></tr>
-              ) : [...history].reverse().map((h,i) => (
+              ) : reversedHistory.map((h,i) => (
                 <tr key={i} style={{color: h.hack !== '—' ? 'var(--red)' : 'inherit'}}>
                   <td>{h.task}</td>
                   <td>{h.label}</td>
